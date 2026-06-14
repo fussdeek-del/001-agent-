@@ -1,0 +1,31 @@
+{
+  "name": "001-agent-",
+  "version": "1.0.0",
+  "description": "An autonomous AI agent built with LangChain and OpenAI capable of reasoning, tool use, and multi-step task execution. Deployed on Render.",
+  "homepage": "https://github.com/fussdeek-del/001-agent-#readme",
+  "bugs": {
+    "url": "https://github.com/fussdeek-del/001-agent-/issues"
+  },
+  "repository": {
+    "type": "module",
+    "url": "git+https://github.com/fussdeek-del/001-agent-.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.1.49",
+    "@langchain/openai": "^1.4.7",
+    "@slack/bolt": "^4.7.3",
+    "@slack/web-api": "^7.17.0",
+    "axios": "^1.17.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  }
+}
