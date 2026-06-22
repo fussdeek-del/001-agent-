@@ -1,140 +1,132 @@
-// @ts-nocheck
-
-import pkg from '@slack/bolt';
-const { App } = pkg;
-import { WebClient } from '@slack/web-api';
-import { ChatOpenAI } from '@langchain/openai';
-import { ChatPromptTemplate } from '@langsmith/core/prompts';
-import express from 'express';
+// db.js
+import pg from 'pg';
+const { Pool } = pg;
 import dotenv from 'dotenv';
-import axios from 'axios';
 
+// Load environment variables from .env file [2]
 dotenv.config();
-const log = {
-    info: (msg, ...args) => console.log('[INFO]', msg, ...args),
-    error: (msg, ...args) => console.log('[ERROR]', msg, ...args),
-    debug: (msg, ...args) => process.env.NODE_ENV === 'development' && console.log('[DEBUG]', msg, ...args),
-};
 
+// Create a connection pool [2]
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false // Allow SSL without certificate verification [2]
+  },
+  max: 20, // Maximum number of clients in the pool [2]
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds [2]
+  connectionTimeoutMillis: 2000 // Fail if connection takes longer than 2 seconds [2]
+});
 
-class SlackAIAgent {
-    constructor() {
-        this.app = express();
-        this.slack = new App({
-            token: process.env.SLACK_BOT_TOKEN,
-            signingSecret: process.env.SLACK_SIGNING_SECRET,
-            socketMode: true,
-            appToken: process.env.SLACK_APP_TOKEN,
-        });
-        this.webClient = new WebClient(process.env.SLACK_BOT_TOKEN);
-        this.openai = new ChatOpenAI({
-            model: "gpt-4",
-            temperature: 0.3,
-            apiKey: process.env.OPENAI_API_KEY,
-        });
+// Event listener for new connections [3]
+pool.on('connect', () => {
+  console.log('database connected');
+});
 
-        this.setupSlackEvents();
-        this.setupExpress();
-    }
+// Event listener for unexpected errors from idle clients [3]
+pool.on('error', (err) => {
+  console.error('unexpected database error', err);
+});
 
-    setupSlackEvents() {
-        this.slack.event('team_join', async ({ event }) => {
-            try {
-                log.info(`New member joined: ${event.user.real_name || event.user.name}`);
-                const userInfo = await this.getUserInfo(event.user.id);
-                await this.analyzeAndPostMember(userInfo);
-            } catch (error) {
-                log.error('Error processing team_join:', error.message);
-            }
-        });
+// Function to initialize the database table and indexes [3]
+export async function initDatabase() {
+  const client = await pool.connect(); // Acquire a client from the pool [3]
+  try {
+    // Create member_analysis table if it doesn't exist [3, 4]
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS member_analysis (
+        id SERIAL PRIMARY KEY,
+        member_id TEXT,
+        member_name TEXT,
+        member_email TEXT,
+        member_title TEXT,
+        member_time_zone TEXT,
+        fit_score INTEGER,
+        insights JSONB,
+        recommendations JSONB,
+        research_data JSONB,
+        analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        sent_to_slack BOOLEAN DEFAULT FALSE,
+        sent_to_slack_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
 
-        this.slack.event('member_joined_channel', async ({ event }) => {
-            try {
-                if (event.channel_type === 'C') {
-                    log.info(`Member ${event.user} joined channel ${event.channel}`);
-                    const userInfo = await this.getUserInfo(event.user);
-                    await this.analyzeAndPostMember(userInfo);
-                }
-            } catch (error) {
-                log.error('Error processing member_joined_channel:', error.message);
-            }
-        });
+    // Create indexes for efficient lookups [5]
+    await client.query('CREATE INDEX IF NOT EXISTS idx_member_id ON member_analysis(member_id);');
+    await client.query('CREATE INDEX IF NOT EXISTS idx_analyzed_at ON member_analysis(analyzed_at);');
 
-        this.slack.error(async (error) => log.error('slack error:', error.message));
-    }
+    console.log('database schema initialized');
+  } catch (error) {
+    console.log(error);
+    throw error;
+  } finally {
+    client.release(); // Always release the client back to the pool [3]
+  }
+}
 
-    setupExpress() {
-        this.app.use(express.json());
+// Function to save analysis results to the database [5]
+export async function saveMemberAnalysis(memberInfo, analysis, researchData) {
+  const client = await pool.connect();
+  try {
+    const query = `
+      INSERT INTO member_analysis (
+        member_id, member_name, member_email, member_title, 
+        member_time_zone, fit_score, insights, 
+        recommendations, research_data
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id
+    `;
+    
+    // Use parameterized queries to prevent SQL injection [5, 6]
+    const values = [
+      memberInfo.id || null,
+      memberInfo.name,
+      memberInfo.email || null,
+      memberInfo.title || null,
+      memberInfo.timeZone || null,
+      analysis.fitScore,
+      JSON.stringify(analysis.insights), // Serialize arrays to JSON strings [6]
+      JSON.stringify(analysis.recommendations),
+      JSON.stringify(researchData)
+    ];
 
-        this.app.get('/health', (req, res) => {
-            res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-        });
+    const result = await client.query(query, values);
+    const analysisId = result.rows.id;
+    console.log(`Analysis saved to database with ID: ${analysisId}`);
+    return analysisId;
+  } catch (error) {
+    console.error('fail to save analysis to database', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
-        if (process.env.NODE_ENV === 'development') {
-            this.app.post('/test/analyze-member', async (req, res) => {
-                try {
-                    const { memberInfo } = req.body;
-                    if (!memberInfo) return res.status(400).json({ error: 'memberInfo is required' });
-                    const analysis = await this.analyzeAndPostMember(memberInfo);
-                    res.json({ success: true, analysis, timestamp: new Date().toISOString() });
-                } catch (error) {
-                    log.error('Test analysis error:', error.message);
-                    res.status(500).json({ error: 'Analysis failed', message: error.message });
-                }
-            });
-        }
+// Function to update record when Slack post succeeds [7]
+export async function markAsSentToSlack(analysisId) {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      UPDATE member_analysis 
+      SET sent_to_slack = true, 
+          sent_to_slack_at = CURRENT_TIMESTAMP, 
+          updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $1
+    `, [analysisId]);
+  } catch (error) {
+    console.error('failed to mark as sent to Slack', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
-        this.app.use((err, req, res, next) => {
-            log.error('Express error', err.message);
-            res.status(500).json({ error: 'Internal server error' });
-        });
-    }
+// Function to gracefully close the connection pool [8]
+export async function closeDatabase() {
+  await pool.end();
+  console.log('database connection pool closed');
+}
 
-    async getUserInfo(userId) {
-        const result = await this.webClient.users.info({ user: userId });
-        const user = result.user;
-        
-        return {
-            id: user.id,
-            name: user.real_name || user.name,
-            username: user.name,
-            email: user.profile?.email,
-            title: user.profile?.title,
-            timezone: user.tz,
-            profile: {
-                firstName: user.profile?.first_name,
-                lastName: user.profile?.last_name,
-                statusText: user.profile?.status_text,
-            },
-        };
-    }
-
-    async doBasicResearch(member) {
-        try {
-            // Minimal research implementation: gather basic info
-            return Promise.resolve({
-                memberId: member.id,
-                name: member.name,
-                profile: member.profile,
-                timestamp: new Date().toISOString(),
-            });
-        } catch (error) {
-            log.error(`Error during basic research for ${member.name}:`, error.message);
-            return Promise.resolve({ memberId: member.id, error: error.message });
-        }
-
-print('Basic research completed for', member.name); 
-    ]}
-
-    async analyzeAndPostMember(member) {
-        try {
-            const researchData = await this.doBasicResearch(member);
-            const prompt = ChatPromptTemplate.fromTemplate(`
-                You are a helpful assistant that analyzes new Slack members based on their profile information.
-                Here is the member's information:
-                Name: {name}
-                Profile: {profile}
-                What insights can you provide about this member? 
-            `);
-
-print()
+// Export the pool as default [8]
+export default pool;
