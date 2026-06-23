@@ -12,12 +12,12 @@ import {
   saveMemberAnalysis, 
   markAsSentToSlack, 
   closeDatabase 
-} from './db.js'; [1, 3]
+} from './db.js';
 
-// Load environment variables
-dotenv.config(); [4]
+// Load environment variables [4]
+dotenv.config();
 
-// Simple logger utility
+// Simple logger utility [4]
 const log = {
   info: (msg) => console.log(`[INFO] ${msg}`),
   error: (msg, err) => console.error(`[ERROR] ${msg}`, err),
@@ -26,37 +26,37 @@ const log = {
       console.log(`[DEBUG] ${msg}`);
     }
   }
-}; [2, 4]
+};
 
 class SlackAIAgent {
   constructor() {
-    // Initialize Express
-    this.app = express(); [2]
+    // Initialize Express for health checks [2]
+    this.app = express();
 
-    // Initialize Slack Bolt App (Socket Mode)
+    // Initialize Slack Bolt App in Socket Mode [2, 5]
     this.slack = new App({
       token: process.env.SLACK_BOT_TOKEN,
       signingSecret: process.env.SLACK_SIGNING_SECRET,
       socketMode: true,
       appToken: process.env.SLACK_APP_TOKEN
-    }); [5]
+    });
 
-    // Standalone Web Client for direct API calls
-    this.webClient = new WebClient(process.env.SLACK_BOT_TOKEN); [5]
+    // Standalone Web Client for direct API calls [5]
+    this.webClient = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-    // Initialize LangChain OpenAI
+    // Initialize LangChain OpenAI [6]
     this.openai = new ChatOpenAI({
       model: "gpt-4",
       temperature: 0.3,
       apiKey: process.env.OPENAI_API_KEY
-    }); [6]
+    });
 
     this.setupSlackEvents();
-    this.setupExpress(); [6]
+    this.setupExpress();
   }
 
   setupSlackEvents() {
-    // Listen for new members joining the workspace
+    // Listen for new members joining the workspace [7, 8]
     this.slack.event('team_join', async ({ event }) => {
       try {
         log.info(`New member joined: ${event.user.real_name || event.user.name}`);
@@ -65,13 +65,12 @@ class SlackAIAgent {
       } catch (error) {
         log.error('Error processing team_join', error);
       }
-    }); [7, 8]
+    });
 
-    // Listen for members joining a specific channel
+    // Listen for members joining a public channel [9]
     this.slack.event('member_joined_channel', async ({ event }) => {
       try {
-        // Only process public channels (type C)
-        if (event.channel_type === 'C') {
+        if (event.channel_type === 'C') { // Only public channels [9]
           log.info(`Member ${event.user} joined channel ${event.channel}`);
           const userInfo = await this.getUserInfo(event.user);
           await this.analyzeAndPostMember(userInfo);
@@ -79,25 +78,25 @@ class SlackAIAgent {
       } catch (error) {
         log.error('Error processing member_joined_channel', error);
       }
-    }); [8, 9]
+    });
 
     this.slack.error(async (error) => {
       log.error('Slack error', error);
-    }); [10]
+    });
   }
 
   setupExpress() {
-    this.app.use(express.json()); [10]
+    this.app.use(express.json());
 
-    // Health check endpoint
+    // Health check endpoint for Render [10, 11]
     this.app.get('/health', (req, res) => {
       res.json({
         status: 'healthy',
         timestamp: new Date().toISOString()
       });
-    }); [11]
+    });
 
-    // Test endpoint (Development only)
+    // Test endpoint (Development only) [11, 12]
     if (process.env.NODE_ENV === 'development') {
       this.app.post('/test-analyze-member', async (req, res) => {
         try {
@@ -112,20 +111,19 @@ class SlackAIAgent {
           res.status(500).json({ error: 'Analysis failed' });
         }
       });
-    } [11, 12]
+    }
 
-    // Global Error Handler
     this.app.use((err, req, res, next) => {
       log.error('Express error', err);
       res.status(500).json({ error: 'Internal server error' });
-    }); [12, 13]
+    });
   }
 
   async getUserInfo(userId) {
     const result = await this.webClient.users.info({ user: userId });
     const user = result.user;
 
-    // Normalize user object
+    // Normalize user object for easier processing [13, 14]
     return {
       id: user.id,
       name: user.real_name || user.name,
@@ -137,51 +135,48 @@ class SlackAIAgent {
       lastName: user.profile?.last_name,
       statusText: user.profile?.status_text
     };
-  } [13, 14]
+  }
 
   async analyzeAndPostMember(memberInfo) {
     let analysisId = null;
     try {
       log.info(`Processing member: ${memberInfo.name}`);
 
-      // Step 1: Research
-      const researchData = await this.doBasicResearch(memberInfo); [15, 16]
+      // Step 1: Research [15, 16]
+      const researchData = await this.doBasicResearch(memberInfo);
 
-      // Step 2: AI Analysis
-      const analysis = await this.analyzeWithAI(memberInfo, researchData); [16]
+      // Step 2: AI Analysis [16]
+      const analysis = await this.analyzeWithAI(memberInfo, researchData);
 
-      // Step 3: Save to Database
-      analysisId = await saveMemberAnalysis(memberInfo, analysis, researchData); [16]
+      // Step 3: Save to Database [16]
+      analysisId = await saveMemberAnalysis(memberInfo, analysis, researchData);
 
-      // Step 4: Post to Slack
-      await this.postAnalysisToChannel(memberInfo, analysis, researchData); [17]
+      // Step 4: Post to Slack [17]
+      await this.postAnalysisToChannel(memberInfo, analysis, researchData);
 
-      // Step 5: Mark as sent in DB
+      // Step 5: Mark as sent in DB [17]
       if (analysisId) {
         await markAsSentToSlack(analysisId);
-      } [17]
+      }
 
       return analysis;
     } catch (error) {
       log.error(`Error processing ${memberInfo.name}`, error);
-      if (analysisId) {
-        log.error(`Analysis ${analysisId} saved to DB but failed Slack post`);
-      }
       throw error;
     }
-  } [15, 18]
+  }
 
   async doBasicResearch(memberInfo) {
     const results = [];
     try {
-      // Check for non-personal company email
+      // Check for non-personal company email [18]
       if (memberInfo.email && !this.isPersonalEmail(memberInfo.email)) {
-        const domain = memberInfo.email.split('@')[19];
+        const domain = memberInfo.email.split('@')[1];
         const companyInfo = await this.getCompanyInfo(domain);
         if (companyInfo) results.push(companyInfo);
       }
 
-      // Search GitHub
+      // Search GitHub [19]
       if (memberInfo.name) {
         const githubInfo = await this.getHubInfo(memberInfo.name);
         if (githubInfo) results.push(githubInfo);
@@ -190,7 +185,7 @@ class SlackAIAgent {
       log.error('Basic research error', error);
     }
     return results;
-  } [17, 20, 21]
+  }
 
   async getCompanyInfo(domain) {
     try {
@@ -199,7 +194,7 @@ class SlackAIAgent {
         headers: { 'User-Agent': 'Mozilla/5.0' }
       });
       const titleMatch = response.data.match(/<title>(.*?)<\/title>/i);
-      const title = titleMatch ? titleMatch[19] : `Company: ${domain}`;
+      const title = titleMatch ? titleMatch[1] : `Company: ${domain}`;
 
       return {
         url: `https://${domain}`,
@@ -208,10 +203,10 @@ class SlackAIAgent {
         type: 'company'
       };
     } catch (error) {
-      log.error(`Could not fetch ${domain}`, error);
+      log.debug(`Could not fetch website for ${domain}: ${error.message}`);
       return null;
     }
-  } [22-24]
+  }
 
   async getHubInfo(name) {
     try {
@@ -231,7 +226,7 @@ class SlackAIAgent {
       log.debug(`GitHub search error: ${error.message}`);
     }
     return null;
-  } [24, 25]
+  }
 
   async analyzeWithAI(memberInfo, researchData) {
     const prompt = ChatPromptTemplate.fromTemplate(`
@@ -248,12 +243,12 @@ class SlackAIAgent {
       - fitScore (0-100)
       - insights (array of 3-5 observations)
       - recommendations (array of 2-4 suggestions)
-    `); [26, 27]
+    `);
 
     try {
       const researchSummary = researchData.length > 0 
         ? researchData.map(d => `${d.title}: ${d.content}`).join('\n')
-        : "Limited research data available"; [28]
+        : "Limited research data available";
 
       const chain = prompt.pipe(this.openai);
       const result = await chain.invoke({
@@ -263,28 +258,29 @@ class SlackAIAgent {
         email: memberInfo.email || "not provided",
         title: memberInfo.title || "not provided",
         research: researchSummary
-      }); [28, 29]
+      });
 
-      // Clean markdown from GPT response
+      // Strip markdown code blocks [3, 20, 21]
       const cleanedResponse = result.content.replace(/```json|```/g, '').trim();
-      const analysis = JSON.parse(cleanedResponse); [29, 30]
+      const analysis = JSON.parse(cleanedResponse);
 
       return {
         fitScore: Math.min(100, Math.max(0, analysis.fitScore)),
         insights: Array.isArray(analysis.insights) ? analysis.insights : ["Analysis completed"],
         recommendations: Array.isArray(analysis.recommendations) ? analysis.recommendations : ["Follow-up recommended"]
-      }; [30, 31]
+      };
     } catch (error) {
       log.error('AI analysis error', error);
       return { fitScore: 50, insights: ["Unable to complete full analysis"], recommendations: ["Manual review"] };
     }
-  } [27]
+  }
 
   async postAnalysisToChannel(memberInfo, analysis, researchData) {
+    // Dynamic color coding for the Slack notification [3, 22]
     const color = analysis.fitScore >= 80 ? '#2eb886' // green
                 : analysis.fitScore >= 60 ? '#f2c744' // yellow
                 : analysis.fitScore >= 40 ? '#e67e22' // orange
-                : '#e74c3c'; // red [31, 32]
+                : '#e74c3c'; // red
 
     const blocks = [
       {
@@ -299,51 +295,55 @@ class SlackAIAgent {
           { type: "mrkdwn", text: `*Title:* ${memberInfo.title || 'Not provided'}` }
         ]
       }
-    ]; [32, 33]
+    ];
 
     if (analysis.insights.length > 0) {
       blocks.push({
         type: "section",
         text: { type: "mrkdwn", text: `*Insights:*\n${analysis.insights.map(i => `• ${i}`).join('\n')}` }
       });
-    } [33, 34]
+    }
 
     if (analysis.recommendations.length > 0) {
       blocks.push({
         type: "section",
         text: { type: "mrkdwn", text: `*Recommendations:*\n${analysis.recommendations.map(r => `• ${r}`).join('\n')}` }
       });
-    } [34]
+    }
 
     blocks.push({
       type: "context",
       elements: [{ type: "mrkdwn", text: `Analyzed at: ${new Date().toISOString()}` }]
-    }); [34]
+    });
 
+    // Wrapping blocks in attachments to display the color bar [3]
     await this.webClient.chat.postMessage({
       channel: process.env.SLACK_PRIVATE_CHANNEL_ID,
       text: `New member analysis for ${memberInfo.name}`,
-      blocks: blocks
-    }); [35]
+      attachments: [{
+        color: color,
+        blocks: blocks
+      }]
+    });
 
     log.info(`Analysis posted to channel for ${memberInfo.name}`);
-  } [35, 36]
+  }
 
   isPersonalEmail(email) {
     const personalDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com'];
-    const domain = email.split('@')[19]?.toLowerCase();
+    const domain = email.split('@')[1]?.toLowerCase();
     return personalDomains.includes(domain);
-  } [36, 37]
+  }
 
   async start() {
     try {
       log.info('Initializing database...');
-      await initDatabase(); [37, 38]
+      await initDatabase();
 
       const port = process.env.PORT || 3000;
       this.server = this.app.listen(port, () => {
         log.info(`Express server running on port ${port}`);
-      }); [38]
+      });
 
       await this.slack.start();
       log.info('Slackbot connected');
@@ -352,7 +352,7 @@ class SlackAIAgent {
       log.error('Failed to start', error);
       process.exit(1);
     }
-  } [38]
+  }
 
   async stop() {
     try {
@@ -368,18 +368,17 @@ class SlackAIAgent {
       log.error('Shutdown error', error);
       process.exit(1);
     }
-  } [39]
+  }
 }
 
-// Instantiate and start the agent
+// Instantiate and start the agent [23, 24]
 const agent = new SlackAIAgent();
 agent.start().catch(err => {
   console.error('Startup failed', err);
   process.exit(1);
-}); [39, 40]
+});
 
-// Graceful shutdown listeners
+// Graceful shutdown listeners [23, 24]
 process.on('SIGTERM', () => agent.stop());
-process.on('SIGINT', () => agent.stop()); [39]
+process.on('SIGINT', () => agent.stop());
 
-export default agent; [40]
