@@ -27,3 +27,7 @@ services:
         sync: false
       - key: COMPANY_PRODUCT
         sync: false
+
+databases:
+  - name: slack-db
+    plan: free
