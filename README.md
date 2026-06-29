@@ -4,4 +4,4 @@ An autonomous AI agent built with LangChain and OpenAI capable of reasoning, too
 ### Under development
 
 
-want to add few more cool things init
+this bot will live in personal slack and greet every new commuity member
